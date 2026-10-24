@@ -10,8 +10,7 @@ from scipy.stats import norm
 from categories import *
 
 GAP_PROB = 0.4         # порог вероятности разрыва (на бэктесте лучший F1)
-REASON_DAYS = 5        # причины ищем среди платежей за 5 дней до разрыва
-MAX_REASONS = 3
+MAX_REASONS = 3        # причины - самые крупные платежи от начала прогноза до самого глубокого минуса
 MIN_REASON_SHARE = 0.05  # платёж меньше 5% от нехватки - не причина (комиссия 990 ₽ при разрыве в 2 млн)
 
 
@@ -40,19 +39,27 @@ def money(amount):
     return f'{amount:.0f} ₽'
 
 
-def _reasons(date, events, shortfall, only_spread, already_negative):
-    """Почему возникает разрыв: крупные платежи за REASON_DAYS дней до него (включая сам день).
+def _big_payments(events, start, end, shortfall):
+    """Списания из events между start и end (включительно), не меньше 5% от нехватки."""
+    if events.empty:
+        return events
+    dates = pd.to_datetime(events['date'])
+    return events[(events['amount'] < 0) & dates.between(start, end)
+                  & (events['amount'].abs() >= MIN_REASON_SHARE * shortfall)]
 
+
+def _reasons(start, deepest_date, events, shortfall, only_spread, already_negative):
+    """Почему возникает разрыв: самые крупные платежи от начала прогноза до самого глубокого минуса.
+
+    Смотрим не только на дни перед первым рискованным днём: если риск начинается сразу
+    (большой разброс), причины - это платежи, которые дальше уводят остаток вниз.
     Мелкие платежи (меньше 5% от нехватки) не показываем - это не причина.
     """
     payments = []
-    if not events.empty:
-        dates = pd.to_datetime(events['date'])
-        near = events[(events['amount'] < 0)
-                      & (dates > date - pd.Timedelta(days=REASON_DAYS)) & (dates <= date)
-                      & (events['amount'].abs() >= MIN_REASON_SHARE * shortfall)]
-        near = near.assign(date=pd.to_datetime(near['date'])).sort_values('amount').head(MAX_REASONS)
-        payments = [f"{row['name']} {row['date']:%d.%m} — {money(row['amount'])}" for _, row in near.iterrows()]
+    big = _big_payments(events, start, deepest_date, shortfall)
+    if not big.empty:
+        big = big.assign(date=pd.to_datetime(big['date'])).sort_values('amount').head(MAX_REASONS)
+        payments = [f"{row['name']} {row['date']:%d.%m} — {money(row['amount'])}" for _, row in big.iterrows()]
 
     reasons = []
     if already_negative:
@@ -61,7 +68,7 @@ def _reasons(date, events, shortfall, only_spread, already_negative):
     if only_spread:
         reasons.append('Остаток близок к нулю: обычные колебания поступлений могут увести его в минус')
     elif not payments:
-        reasons.append('Крупных обязательных платежей рядом нет: остаток снижается из-за текущих расходов '
+        reasons.append('Крупных обязательных платежей нет: остаток снижается из-за текущих расходов '
                        '(закупки, услуги), поступлений не хватает')
     return reasons
 
@@ -86,9 +93,11 @@ def _advice(date, days_left, shortfall, has_mandatory, only_spread):
 
 
 def find_gaps(forecast, events):
-    """-> список предупреждений (пустой или из одного): date, shortfall, probability, reasons, advice
+    """-> список предупреждений (пустой или из одного):
+    date, deepest_date, shortfall, probability, reasons, advice
 
     date        - первый день, где вероятность уйти в минус >= GAP_PROB
+    deepest_date - день самого глубокого минуса ("к такому-то числу может не хватить N")
     shortfall   - сколько не хватит: самый глубокий минус с этого дня; если в среднем остаток
                   не отрицательный и риск только из-за разброса - минимум нижней границы (-low)
     probability - максимальная вероятность минуса за 30 дней
@@ -99,23 +108,28 @@ def find_gaps(forecast, events):
     if risky.empty:
         return []
 
+    start = forecast['date'].min()
     date = risky['date'].iloc[0]
     after = forecast[forecast['date'] >= date]
     deepest = after['balance'].min()
     only_spread = deepest >= 0  # в среднем денег хватает, риск только из-за разброса
-    shortfall = -risky['low'].min() if only_spread else -deepest
-
-    if events.empty:
-        has_mandatory = False
+    if only_spread:
+        shortfall = -risky['low'].min()
+        deepest_date = risky.loc[risky['low'].idxmin(), 'date']
     else:
-        near = pd.to_datetime(events['date']).between(date - pd.Timedelta(days=REASON_DAYS), date)
-        has_mandatory = (near & (events['amount'] < 0) & events['category'].isin(MANDATORY_CATEGORIES)).any()
-    days_left = (date - forecast['date'].min()).days
+        shortfall = -deepest
+        deepest_date = after.loc[after['balance'].idxmin(), 'date']
+
+    big = _big_payments(events, start, deepest_date, shortfall)
+    has_mandatory = not big.empty and big['category'].isin(MANDATORY_CATEGORIES).any()
+    days_left = (date - start).days
 
     return [{
         'date': date,
+        'deepest_date': deepest_date,
         'shortfall': round(float(shortfall), 2),
         'probability': round(float(forecast['prob'].max()), 3),
-        'reasons': _reasons(date, events, shortfall, only_spread, forecast['balance'].iloc[0] < 0),
+        'reasons': _reasons(start, deepest_date, events, shortfall, only_spread,
+                            forecast['balance'].iloc[0] < 0),
         'advice': _advice(date, days_left, shortfall, has_mandatory, only_spread),
     }]
