@@ -1,3 +1,4 @@
+import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
@@ -73,6 +74,25 @@ if FORECAST_READY:
 fig.add_hline(y=0, line_color='red', line_dash='dot')
 fig.update_layout(height=450, yaxis_title='₽')
 st.plotly_chart(fig, width='stretch')
+
+# ---------- ближайшие платежи ----------
+start = summary['last_date'] + pd.Timedelta(days=1)
+end = start + pd.Timedelta(days=29)
+st.header('Ближайшие обязательные платежи')
+st.caption(f"С {start:%d.%m.%Y} по {end:%d.%m.%Y}. Найдены по истории операций и налоговому календарю")
+
+if events.empty:
+    st.info('Регулярных платежей в истории не нашли')
+else:
+    st.metric('Всего к оплате за 30 дней', f"{-events['amount'].sum():,.0f} ₽".replace(',', ' '))
+    sources = {'regular': 'найден в истории', 'tax': 'налоговый календарь', 'manual': 'введён вручную'}
+    table = pd.DataFrame({
+        'Дата': events['date'].dt.strftime('%d.%m.%Y'),
+        'Платёж': events['name'],
+        'Сумма, ₽': (-events['amount']).round(0),
+        'Откуда известно': events['source'].map(sources),
+    })
+    st.dataframe(table, width='stretch', hide_index=True)
 
 # ---------- категории ----------
 st.header('Куда приходят и уходят деньги')
