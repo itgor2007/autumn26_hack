@@ -33,14 +33,13 @@ INCOME_CATEGORIES = [RETAIL, CLIENTS, MARKETPLACE, LOANS_IN, SUBSIDY, REFUND_IN,
 EXPENSE_CATEGORIES = [SALARY, GPH, TAXES, RENT, UTILITIES, LOANS_OUT, SUPPLIERS, SERVICES,
                       ADS, FUEL, BANK_FEES, OWNER, BIG_PURCHASES, FINES, TRANSFERS, OTHER]
 
-# на этих категориях учится модель прогноза (то, что идёт "потоком")
-ML_CATEGORIES = [RETAIL, CLIENTS, MARKETPLACE, GPH, SUPPLIERS, SERVICES, ADS, FUEL, OTHER]
-
 # обычно регулярные, их ищет regular_payments
 REGULAR_CATEGORIES = [SALARY, TAXES, RENT, UTILITIES, LOANS_OUT, BANK_FEES]
 
-# разовые и переводы - в прогноз не берём, только показываем в истории
-EXCLUDED_CATEGORIES = [LOANS_IN, SUBSIDY, REFUND_IN, OWNER, BIG_PURCHASES, FINES, TRANSFERS]
+# "спасательные" поступления: владелец докладывает деньги или берёт кредит, когда их не хватает.
+# В прогноз их не берём - мы как раз хотим заранее увидеть, когда без них ушли бы в минус.
+# Считаются только поступления, переводы владельцу/в другой банк (списания) в прогнозе остаются.
+RESCUE_CATEGORIES = [TRANSFERS, LOANS_IN]
 
 # обязательные платежи, на них в первую очередь смотрим при поиске разрыва
 MANDATORY_CATEGORIES = [SALARY, TAXES, RENT, UTILITIES, LOANS_OUT]
