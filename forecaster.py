@@ -26,28 +26,38 @@ def daily_flow(daily, ops):
     return table[~table['is_gap']]
 
 
-def forecast_flows(daily, ops, events, horizon=30):
-    """Baseline: средний поток по дню недели за последние полгода.
+def weekday_profile(daily, ops):
+    """Средний поток по каждому дню недели и sigma.
 
-    Возвращает date, flow, sigma. sigma - насколько обычно реальный день
-    отличается от прогноза, нужна для вероятности разрыва.
+    Возвращает (by_weekday, sigma, history): by_weekday - среднее для пн..вс (0..6),
+    history - дни, по которым считали. Отдельно, чтобы показать это в логе расчёта.
     """
     start = daily['date'].max() + pd.Timedelta(days=1)
-    dates = pd.date_range(start, periods=horizon, freq='D')
-
     table = daily_flow(daily, ops)
     history = table[table['date'] >= start - pd.Timedelta(weeks=WEEKS)]
     if len(history) < MIN_DAYS:
         history = table
 
     if history.empty:
-        return pd.DataFrame({'date': dates, 'flow': 0.0, 'sigma': 0.0})
+        return pd.Series(dtype=float), 0.0, history
 
     weekday = history['date'].dt.day_of_week
     by_weekday = history.groupby(weekday)['flow'].mean()
 
+    # sigma - насколько обычно реальный день отличается от среднего своего дня недели
     error = history['flow'] - weekday.map(by_weekday)
     sigma = error.std() if len(error) > 1 else 0.0
+    return by_weekday, sigma, history
+
+
+def forecast_flows(daily, ops, events, horizon=30):
+    """Baseline: средний поток по дню недели за последние полгода.
+
+    Возвращает date, flow, sigma. sigma нужна для вероятности разрыва.
+    """
+    start = daily['date'].max() + pd.Timedelta(days=1)
+    dates = pd.date_range(start, periods=horizon, freq='D')
+    by_weekday, sigma, history = weekday_profile(daily, ops)
 
     result = pd.DataFrame({'date': dates})
     result['flow'] = result['date'].dt.day_of_week.map(by_weekday).fillna(0)
